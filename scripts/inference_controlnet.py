@@ -1,31 +1,37 @@
-import torch
 import json
 import os
-import numpy as np
+
 import cv2
-import matplotlib
-from tqdm import tqdm
-from diffusers import DiffusionPipeline
-from diffusers import DPMSolverMultistepScheduler
-from diffusers.utils import load_image
-from torch import Generator
-from PIL import Image
-from packaging import version
-
-from transformers import CLIPTextModel, CLIPTokenizer, AutoTokenizer, PretrainedConfig
-
 import diffusers
-from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel, ControlNetModel, T2IAdapter
+import matplotlib
+import numpy as np
+import torch
+from controlnet_aux import CannyDetector, MidasDetector
+from diffusers import (
+    AutoencoderKL,
+    ControlNetModel,
+    DDPMScheduler,
+    DiffusionPipeline,
+    DPMSolverMultistepScheduler,
+    StableDiffusionPipeline,
+    T2IAdapter,
+    UNet2DConditionModel,
+)
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
-from diffusers.utils import check_min_version, deprecate, is_wandb_available
+from diffusers.utils import check_min_version, deprecate, is_wandb_available, load_image
 from diffusers.utils.import_utils import is_xformers_available
+from packaging import version
+from PIL import Image
+from torch import Generator
+from tqdm import tqdm
+from transformers import AutoTokenizer, CLIPTextModel, CLIPTokenizer, PretrainedConfig
 
-from model.unet_adapter import UNet2DConditionModel
 from model.adapter import Adapter_XL
-from pipeline.pipeline_sd_xl_adapter_controlnet import StableDiffusionXLAdapterControlnetPipeline
-from controlnet_aux import MidasDetector, CannyDetector
-
+from model.unet_adapter import UNet2DConditionModel
+from pipeline.pipeline_sd_xl_adapter_controlnet import (
+    StableDiffusionXLAdapterControlnetPipeline,
+)
 from scripts.utils import str2float
 
 
@@ -50,7 +56,7 @@ def import_model_class_from_model_name_or_path(
 
 
 def inference_controlnet(args):
-    device = 'cuda'
+    device = "cuda"
     weight_dtype = torch.float16
 
     controlnet_condition_scale_list = str2float(args.controlnet_condition_scale_list)
@@ -89,28 +95,28 @@ def inference_controlnet(args):
     controlnet = ControlNetModel.from_pretrained(
         controlnet_path, torch_dtype=weight_dtype
     )
-    print('successfully load controlnet')
+    print("successfully load controlnet")
 
     input_image = Image.open(args.input_image_path)
     # input_image = input_image.resize((512, 512), Image.LANCZOS)
-    input_image = input_image.resize((args.width_sd1_5, args.height_sd1_5), Image.LANCZOS)
+    input_image = input_image.resize(
+        (args.width_sd1_5, args.height_sd1_5), Image.LANCZOS
+    )
     if args.condition_type == "canny":
         control_image = canny(input_image)
-        control_image.save(f'{args.save_path}/{prompt[:10]}_canny_condition.png')
+        control_image.save(f"{args.save_path}/{prompt[:10]}_canny_condition.png")
     elif args.condition_type == "depth":
         control_image = depth(input_image)
-        control_image.save(f'{args.save_path}/{prompt[:10]}_depth_condition.png')
+        control_image.save(f"{args.save_path}/{prompt[:10]}_depth_condition.png")
 
     # load adapter
     adapter = Adapter_XL()
     ckpt = torch.load(adapter_path)
     adapter.load_state_dict(ckpt)
     adapter.to(weight_dtype)
-    print('successfully load adapter')
+    print("successfully load adapter")
     # load SD1.5
-    noise_scheduler_sd1_5 = DDPMScheduler.from_pretrained(
-        path, subfolder="scheduler"
-    )
+    noise_scheduler_sd1_5 = DDPMScheduler.from_pretrained(path, subfolder="scheduler")
     tokenizer_sd1_5 = CLIPTokenizer.from_pretrained(
         path, subfolder="tokenizer", revision=None, torch_dtype=weight_dtype
     )
@@ -123,18 +129,24 @@ def inference_controlnet(args):
     unet_sd1_5 = UNet2DConditionModel.from_pretrained(
         path, subfolder="unet", revision=None, torch_dtype=weight_dtype
     )
-    print('successfully load SD1.5')
+    print("successfully load SD1.5")
     # load SDXL
     tokenizer_one = AutoTokenizer.from_pretrained(
-        path_sdxl, subfolder="tokenizer", revision=None, use_fast=False, torch_dtype=weight_dtype
+        path_sdxl,
+        subfolder="tokenizer",
+        revision=None,
+        use_fast=False,
+        torch_dtype=weight_dtype,
     )
     tokenizer_two = AutoTokenizer.from_pretrained(
-        path_sdxl, subfolder="tokenizer_2", revision=None, use_fast=False, torch_dtype=weight_dtype
+        path_sdxl,
+        subfolder="tokenizer_2",
+        revision=None,
+        use_fast=False,
+        torch_dtype=weight_dtype,
     )
     # import correct text encoder classes
-    text_encoder_cls_one = import_model_class_from_model_name_or_path(
-        path_sdxl, None
-    )
+    text_encoder_cls_one = import_model_class_from_model_name_or_path(path_sdxl, None)
     text_encoder_cls_two = import_model_class_from_model_name_or_path(
         path_sdxl, None, subfolder="text_encoder_2"
     )
@@ -152,8 +164,7 @@ def inference_controlnet(args):
     unet = UNet2DConditionModel.from_pretrained(
         path_sdxl, subfolder="unet", revision=None, torch_dtype=weight_dtype
     )
-    print('successfully load SDXL')
-
+    print("successfully load SDXL")
 
     if is_xformers_available():
         import xformers
@@ -166,7 +177,6 @@ def inference_controlnet(args):
         unet.enable_xformers_memory_efficient_attention()
         unet_sd1_5.enable_xformers_memory_efficient_attention()
         controlnet.enable_xformers_memory_efficient_attention()
-
 
     with torch.inference_mode():
         gen = Generator("cuda")
@@ -185,30 +195,43 @@ def inference_controlnet(args):
             unet_sd1_5=unet_sd1_5,
             scheduler_sd1_5=noise_scheduler_sd1_5,
             adapter=adapter,
-            controlnet=controlnet
+            controlnet=controlnet,
         )
 
         pipe.enable_model_cpu_offload()
 
         pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
-        pipe.scheduler_sd1_5 = DPMSolverMultistepScheduler.from_config(pipe.scheduler_sd1_5.config)
+        pipe.scheduler_sd1_5 = DPMSolverMultistepScheduler.from_config(
+            pipe.scheduler_sd1_5.config
+        )
         pipe.scheduler_sd1_5.config.timestep_spacing = "leading"
-        pipe.unet.to(device=device, dtype=torch.float16, memory_format=torch.channels_last)
+        pipe.unet.to(
+            device=device, dtype=torch.float16, memory_format=torch.channels_last
+        )
 
         for i in range(args.iter_num):
             for controlnet_condition_scale in controlnet_condition_scale_list:
                 for adapter_guidance_start in adapter_guidance_start_list:
                     for adapter_condition_scale in adapter_condition_scale_list:
-                        img = \
-                            pipe(prompt=prompt, negative_prompt=negative_prompt, prompt_sd1_5=prompt_sd1_5,
-                                 width=args.width, height=args.height, height_sd1_5=args.height_sd1_5,
-                                 width_sd1_5=args.width_sd1_5, image=control_image,
-                                 num_inference_steps=args.num_inference_steps, guidance_scale=args.guidance_scale,
-                                 num_images_per_prompt=1, generator=gen,
-                                 controlnet_conditioning_scale=controlnet_condition_scale,
-                                 adapter_condition_scale=adapter_condition_scale,
-                                 adapter_guidance_start=adapter_guidance_start).images[0]
+                        img = pipe(
+                            prompt=prompt,
+                            negative_prompt=negative_prompt,
+                            prompt_sd1_5=prompt_sd1_5,
+                            width=args.width,
+                            height=args.height,
+                            height_sd1_5=args.height_sd1_5,
+                            width_sd1_5=args.width_sd1_5,
+                            image=control_image,
+                            num_inference_steps=args.num_inference_steps,
+                            guidance_scale=args.guidance_scale,
+                            num_images_per_prompt=1,
+                            generator=gen,
+                            controlnet_conditioning_scale=controlnet_condition_scale,
+                            adapter_condition_scale=adapter_condition_scale,
+                            adapter_guidance_start=adapter_guidance_start,
+                        ).images[0]
                         img.save(
-                            f"{args.save_path}/{prompt[:10]}_{i}_ccs_{controlnet_condition_scale:.2f}_ags_{adapter_guidance_start:.2f}_acs_{adapter_condition_scale:.2f}.png")
+                            f"{args.save_path}/{prompt[:10]}_{i}_ccs_{controlnet_condition_scale:.2f}_ags_{adapter_guidance_start:.2f}_acs_{adapter_condition_scale:.2f}.png"
+                        )
 
         print(f"results saved in {args.save_path}")
